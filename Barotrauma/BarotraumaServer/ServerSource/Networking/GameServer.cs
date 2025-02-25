@@ -624,7 +624,7 @@ namespace Barotrauma.Networking
                         readyToStartAutomatically = true;
                     }
                 }
-                if (readyToStartAutomatically)
+                if (readyToStartAutomatically && !isRoundStartWarningActive)
                 {
                     if (!wasReadyToStartAutomatically) { GameMain.NetLobbyScreen.LastUpdateID++; }
                     TryStartGame();
@@ -852,9 +852,8 @@ namespace Barotrauma.Networking
                             IWriteMessage msg = new WriteOnlyMessage().WithHeader(ServerPacketHeader.CANCEL_STARTGAME);
                             serverPeer.Send(msg, c.Connection, DeliveryMethod.Reliable);
                         }
+                        AbortStartGameIfWarningActive();
                     }
-
-                    AbortStartGameIfWarningActive();
                     break;
                 case ClientPacketHeader.REQUEST_STARTGAMEFINALIZE:
                     if (connectedClient == null)
@@ -1299,13 +1298,22 @@ namespace Barotrauma.Networking
                     //check if midround syncing is needed due to missed unique events
                     if (!midroundSyncingDone) { entityEventManager.InitClientMidRoundSync(c); }
                     MissionAction.NotifyMissionsUnlockedThisRound(c);
-                    if (GameMain.GameSession.Campaign is MultiPlayerCampaign mpCampaign)
+                
+                    if (GameMain.GameSession.GameMode is PvPMode)
                     {
-                        mpCampaign.SendCrewState();
+                        if (c.TeamID == CharacterTeamType.None)
+                        {
+                            AssignClientToPvpTeamMidgame(c);
+                        }
                     }
-                    else if (GameMain.GameSession.GameMode is PvPMode && c.TeamID == CharacterTeamType.None)
+                    else
                     {
-                        AssignClientToPvpTeamMidgame(c);
+                        if (GameMain.GameSession.Campaign is MultiPlayerCampaign mpCampaign)
+                        {
+                            mpCampaign.SendCrewState();
+                        }
+                        //everyone's in team 1 in non-pvp game modes
+                        c.TeamID = CharacterTeamType.Team1;
                     }
                     c.InGame = true;
                 }
@@ -2244,12 +2252,13 @@ namespace Barotrauma.Networking
                     outmsg.WriteUInt16((UInt16)settingsBuf.LengthBytes);
                     outmsg.WriteBytes(settingsBuf.Buffer, 0, settingsBuf.LengthBytes);
 
-                    outmsg.WriteBoolean(c.LastRecvLobbyUpdate < 1);
-                    if (c.LastRecvLobbyUpdate < 1)
+                    outmsg.WriteBoolean(!c.InitialLobbyUpdateSent);
+                    if (!c.InitialLobbyUpdateSent)
                     {
                         isInitialUpdate = true;
                         initialUpdateBytes = outmsg.LengthBytes;
                         ClientWriteInitial(c, outmsg);
+                        c.InitialLobbyUpdateSent = true;
                         initialUpdateBytes = outmsg.LengthBytes - initialUpdateBytes;
                     }
                     outmsg.WriteString(GameMain.NetLobbyScreen.SelectedSub.Name);
@@ -2567,6 +2576,21 @@ namespace Barotrauma.Networking
         private void AbortStartGameIfWarningActive()
         {
             isRoundStartWarningActive = false;
+            //reset autorestart countdown to give the clients time to reselect perks
+            if (ServerSettings.AutoRestart) 
+            { 
+                ServerSettings.AutoRestartTimer = Math.Max(ServerSettings.AutoRestartInterval, 5.0f); 
+            }
+            //reset start round votes so we don't immediately attempt to restart
+            foreach (var client in connectedClients)
+            {
+                client.SetVote(VoteType.StartRound, false);
+            }
+
+            int clientsReady = connectedClients.Count(c => c.GetVote<bool>(VoteType.StartRound));
+
+            GameMain.NetLobbyScreen.LastUpdateID++;
+
             CoroutineManager.StopCoroutines(nameof(WarnAndDelayStartGame));
         }
 
@@ -3113,6 +3137,7 @@ namespace Barotrauma.Networking
             {
                 msg.WriteString(levelSeed);
                 msg.WriteSingle(ServerSettings.SelectedLevelDifficulty);
+                msg.WriteIdentifier(ServerSettings.Biome == "Random".ToIdentifier() ? Identifier.Empty : ServerSettings.Biome);
                 msg.WriteString(gameSession.SubmarineInfo.Name);
                 msg.WriteString(gameSession.SubmarineInfo.MD5Hash.StringRepresentation);
                 var selectedShuttle = GameStarted && RespawnManager != null && RespawnManager.UsingShuttle ? 
@@ -3350,6 +3375,24 @@ namespace Barotrauma.Networking
 
             if (c == null || string.IsNullOrEmpty(newName) || !NetIdUtils.IdMoreRecent(nameId, c.NameId)) { return false; }
 
+            if (!newJob.IsEmpty)
+            {
+                if (!JobPrefab.Prefabs.TryGet(newJob, out JobPrefab newJobPrefab) || newJobPrefab.HiddenJob)
+                {
+                    newJob = Identifier.Empty;
+                }
+            }
+
+            if (newName == c.Name && newJob == c.PreferredJob && newTeam == c.PreferredTeam) { return false; }
+
+            c.NameId = nameId;
+            c.PreferredJob = newJob;
+            if (newTeam != c.PreferredTeam)
+            {
+                c.PreferredTeam = newTeam;
+                RefreshPvpTeamAssignments();
+            }
+
             var timeSinceNameChange = DateTime.Now - c.LastNameChangeTime;
             if (timeSinceNameChange < Client.NameChangeCoolDown && newName != c.Name)
             {
@@ -3359,21 +3402,13 @@ namespace Barotrauma.Networking
                     var coolDownRemaining = Client.NameChangeCoolDown - timeSinceNameChange;
                     SendDirectChatMessage($"ServerMessage.NameChangeFailedCooldownActive~[seconds]={(int)coolDownRemaining.TotalSeconds}", c);
                     LastClientListUpdateID++;
+                    //increment the ID to make sure the current server-side name is treated as the "latest",
+                    //and the client correctly reverts back to the old name
+                    c.NameId++;
                 }
-                c.NameId = nameId;
                 c.RejectedName = newName;
                 return false;
             }
-
-            if (!newJob.IsEmpty)
-            {
-                if (!JobPrefab.Prefabs.TryGet(newJob, out JobPrefab newJobPrefab) || newJobPrefab.HiddenJob)
-                {
-                    newJob = Identifier.Empty;
-                }
-            }
-            c.NameId = nameId;
-            if (newName == c.Name && newJob == c.PreferredJob && newTeam == c.PreferredTeam) { return false; }
 
             var result = GameMain.LuaCs.Hook.Call<bool?>("tryChangeClientName", c, newName, newJob, newTeam);
 
@@ -3381,14 +3416,6 @@ namespace Barotrauma.Networking
             {
                 LastClientListUpdateID++;
                 return result.Value;
-            }
-
-            c.PreferredJob = newJob;
-
-            if (newTeam != c.PreferredTeam)
-            {
-                c.PreferredTeam = newTeam;
-                RefreshPvpTeamAssignments();
             }
 
             return TryChangeClientName(c, newName);
@@ -3764,13 +3791,13 @@ namespace Barotrauma.Networking
                     }
                     else //msg sent by an AI character
                     {
-                        senderName = senderCharacter.Name;
+                        senderName = senderCharacter.DisplayName;
                     }
                 }
                 else //msg sent by a client
                 {
                     senderCharacter = senderClient.Character;
-                    senderName = senderCharacter == null ? senderClient.Name : senderCharacter.Name;
+                    senderName = senderCharacter == null ? senderClient.Name : senderCharacter.DisplayName;
                     if (type == ChatMessageType.Private)
                     {
                         if (senderCharacter != null && !senderCharacter.IsDead || targetClient.Character != null && !targetClient.Character.IsDead)

@@ -70,7 +70,7 @@ namespace Barotrauma
             }
         }
 
-        public override int GetBaseReward(Submarine sub)
+        public override float GetBaseReward(Submarine sub)
         {
             return alternateReward;
         }
@@ -128,7 +128,7 @@ namespace Barotrauma
                 {
                     Identifier characterIdentifier = characterElement.GetAttributeIdentifier("identifier", Identifier.Empty);
                     Identifier characterFrom = characterElement.GetAttributeIdentifier("from", Identifier.Empty);
-                    HumanPrefab humanPrefab = NPCSet.Get(characterFrom, characterIdentifier);
+                    HumanPrefab humanPrefab = NPCSet.Get(characterFrom, characterIdentifier, contentPackageToLogInError: Prefab.ContentPackage);
                     if (humanPrefab == null)
                     {
                         DebugConsole.ThrowError($"Error in mission \"{prefab.Identifier}\". Character prefab \"{characterIdentifier}\" not found in the NPC set \"{characterFrom}\".",
@@ -479,10 +479,7 @@ namespace Barotrauma
             }
 #endif
             enemySub.SetPosition(spawnPos);
-            if (!IsClient)
-            {
-                InitPirateShip();
-            }
+            InitPirateShip();            
 
             // flipping the sub on the frame it is moved into place must be done after it's been moved, or it breaks item connections in the submarine
             // creating the pirates has to be done after the sub has been flipped, or it seems to break the AI pathing

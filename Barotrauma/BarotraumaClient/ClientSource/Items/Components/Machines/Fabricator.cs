@@ -372,17 +372,17 @@ namespace Barotrauma.Items.Components
             outputContainer.Inventory.RectTransform = outputInventoryHolder.RectTransform;
         }
 
-        private static LocalizedString GetRecipeNameAndAmount(FabricationRecipe fabricationRecipe)
+        private static RichString GetRecipeNameAndAmount(FabricationRecipe fabricationRecipe)
         {
             if (fabricationRecipe == null) { return ""; }
             if (fabricationRecipe.Amount > 1)
             {
                 return TextManager.GetWithVariables("fabricationrecipenamewithamount",
-                    ("[name]", fabricationRecipe.DisplayName), ("[amount]", fabricationRecipe.Amount.ToString()));
+                    ("[name]", RichString.Rich(fabricationRecipe.DisplayName)), ("[amount]", fabricationRecipe.Amount.ToString()));
             }
             else
             {
-                return fabricationRecipe.DisplayName;
+                return RichString.Rich(fabricationRecipe.DisplayName);
             }
         }
 
@@ -1031,7 +1031,7 @@ namespace Barotrauma.Items.Components
         {
             if (selectedItem == null) { return false; }
             if (fabricatedItem == null && 
-                !outputContainer.Inventory.CanBePut(selectedItem.TargetItem, selectedItem.OutCondition * selectedItem.TargetItem.Health))
+                !outputContainer.Inventory.CanProbablyBePut(selectedItem.TargetItem, selectedItem.OutCondition * selectedItem.TargetItem.Health))
             {
                 outputSlot.Flash(GUIStyle.Red);
                 return false;

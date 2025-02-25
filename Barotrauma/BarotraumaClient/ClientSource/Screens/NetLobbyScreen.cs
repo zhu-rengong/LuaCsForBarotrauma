@@ -790,12 +790,16 @@ namespace Barotrauma
 
             var winScoreContainer = CreateLabeledSlider(gameModeSettingsContent, headerTag: string.Empty, valueLabelTag: string.Empty, tooltipTag: "ServerSettingsWinScorePvPTooltip",
                 out var winScorePvPSlider, out var winScorePvPSliderLabel);
-            winScorePvPSlider.Range = new Vector2(1, 1000);
-            winScorePvPSlider.StepValue = 1;
+            winScorePvPSlider.Range = new Vector2(10, 1000);
+            winScorePvPSlider.StepValue = 10;
             winScorePvPSlider.OnMoved = (scrollBar, _) =>
             {
                 if (scrollBar.UserData is not GUITextBlock text) { return false; }
                 text.Text = TextManager.GetWithVariable("ServerSettingsWinScoreValuePvP", "[value]", ((int)Math.Round(scrollBar.BarScrollValue, digits: 0)).ToString());
+                return true;
+            };
+            winScorePvPSlider.OnReleased = (scrollBar, _) =>
+            {
                 GameMain.Client?.ServerSettings.ClientAdminWrite(ServerSettings.NetFlags.Properties);
                 return true;
             };
@@ -931,7 +935,7 @@ namespace Barotrauma
             //do this before adding the contents, otherwise they get disabled too (and we just want to disable the dropdown itself)
             clientDisabledElements.AddRange(biomeHolder.GetAllChildren());
             biomeDropdown.AddItem(TextManager.Get("random"), "Random".ToIdentifier());
-            foreach (var biome in Biome.Prefabs)
+            foreach (var biome in Biome.Prefabs.OrderBy(b => b.MinDifficulty))
             {
                 if (biome.IsEndBiome) { continue; }
                 biomeDropdown.AddItem(biome.DisplayName, biome.Identifier);
@@ -1195,7 +1199,7 @@ namespace Barotrauma
             var respawnModeHolder = new GUILayoutGroup(new RectTransform(new Vector2(1.0f, 0.1f), settingsContent.RectTransform), isHorizontal: true, childAnchor: Anchor.CenterLeft) { Stretch = true };
             respawnModeLabel = new GUITextBlock(new RectTransform(new Vector2(0.4f, 0.0f), respawnModeHolder.RectTransform), TextManager.Get("RespawnMode"), wrap: true);
             respawnModeSelection = new GUISelectionCarousel<RespawnMode>(new RectTransform(new Vector2(0.6f, 1.0f), respawnModeHolder.RectTransform));
-            foreach (var respawnMode in Enum.GetValues(typeof(RespawnMode)).Cast<RespawnMode>())
+            foreach (var respawnMode in Enum.GetValues(typeof(RespawnMode)).Cast<RespawnMode>().Where(rm => rm != RespawnMode.None))
             {
                 respawnModeSelection.AddElement(respawnMode, TextManager.Get($"respawnmode.{respawnMode}"), TextManager.Get($"respawnmode.{respawnMode}.tooltip"));
             }
@@ -2708,20 +2712,25 @@ namespace Barotrauma
                     
                     if (newTeamPreference == CharacterTeamType.None
                         && GameMain.Client?.ServerSettings?.PvpTeamSelectionMode == PvpTeamSelectionMode.PlayerChoice) { return false; } // Already handled by delegate above 
-                    
+
+                    var oldPreference = MultiplayerPreferences.Instance.TeamPreference;
+
                     MultiplayerPreferences.Instance.TeamPreference = newTeamPreference;
                     
                     UpdateSelectedSub(newTeamPreference);
-                    GameMain.Client?.ForceNameJobTeamUpdate();
+                    if (newTeamPreference != oldPreference)
+                    {
+                        GameMain.Client?.ForceNameJobTeamUpdate();
+                        GameSettings.SaveCurrentConfig();
+                    }
                     RefreshPvpTeamSelectionButtons();
-                    GameSettings.SaveCurrentConfig();
                     UpdateDisembarkPointListFromServerSettings();
                     //need to update job preferences and close the selection frame
                     //because the team selection might affect the uniform sprite and the loadouts
                     UpdateJobPreferences(GameMain.Client?.CharacterInfo ?? Character.Controlled?.Info);
                     JobSelectionFrame = null;
                     RefreshChatrow(); // to enable/disable team chat according to current selection
-                    
+
                     return true;
                 };
 
@@ -3000,10 +3009,13 @@ namespace Barotrauma
                     }
                 }
                 outpostDropdown.ListBox.Select(prevSelected);
+                GameMain.Client.ServerSettings.AssignGUIComponent(nameof(ServerSettings.SelectedOutpostName), outpostDropdown);
             }
             else
             {
                 outpostDropdown.Parent.Visible = false;
+                //remove assignment, we shouldn't try selecting the outpost when there's none to select
+                GameMain.Client.ServerSettings.AssignGUIComponent(nameof(ServerSettings.SelectedOutpostName), null);
             }
             outpostDropdownUpToDate = true;
         }
@@ -4015,7 +4027,9 @@ namespace Barotrauma
                 JobSelectionFrame.Visible = false;
             }
 
-            if (GUI.MouseOn?.UserData is JobVariant jobPrefab && GUI.MouseOn.Style?.Name == "JobVariantButton")
+            if (GUI.MouseOn?.UserData is JobVariant jobPrefab && 
+                GUI.MouseOn.Style?.Name == "JobVariantButton" &&
+                GUI.MouseOn.Parent != null)
             {
                 if (jobVariantTooltip?.UserData is not JobVariant prevVisibleVariant || 
                     prevVisibleVariant.Prefab != jobPrefab.Prefab || 
@@ -4765,19 +4779,29 @@ namespace Barotrauma
             {
                 TeamChatSelected = false;
             }
-            
-            chatInput = new GUITextBox(new RectTransform(new Vector2(0.75f, 1.0f), chatRow.RectTransform, Anchor.CenterRight))
-            {
-                MaxTextLength = ChatMessage.MaxLength,
-                Font = GUIStyle.SmallFont,
-                DeselectAfterMessage = false
-            };
 
-            micIcon = new GUIImage(new RectTransform(new Vector2(0.05f, 1.0f), chatRow.RectTransform), style: "GUIMicrophoneUnavailable");
-            
-            chatInput.Select();
+            if (chatInput != null)
+            {
+                chatInput.RectTransform.Parent = chatRow.RectTransform;
+            }
+            else
+            {
+                chatInput = new GUITextBox(new RectTransform(new Vector2(0.75f, 1.0f), chatRow.RectTransform, Anchor.CenterRight))
+                {
+                    MaxTextLength = ChatMessage.MaxLength,
+                    Font = GUIStyle.SmallFont,
+                    DeselectAfterMessage = false
+                };
+
+                micIcon = new GUIImage(new RectTransform(new Vector2(0.05f, 1.0f), chatRow.RectTransform), style: "GUIMicrophoneUnavailable");
+                chatInput.Select();
+            }
+
+            //this needs to be done even if we're using the existing chatinput instance instead of creating a new one,
+            //because the client might not have existed when the input box was first created
             if (GameMain.Client != null)
             {
+                chatInput.ResetDelegates();
                 chatInput.OnEnterPressed = GameMain.Client.EnterChatMessage;
                 chatInput.OnTextChanged += GameMain.Client.TypingChatMessage;
                 chatInput.OnDeselected += (sender, key) =>

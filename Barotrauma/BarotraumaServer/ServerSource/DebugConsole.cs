@@ -1747,7 +1747,34 @@ namespace Barotrauma
                     SpawnItem(args, cursorWorldPos, client.Character, out string errorMsg);
                     if (!string.IsNullOrWhiteSpace(errorMsg))
                     {
-                        GameMain.Server.SendConsoleMessage(errorMsg, client);
+                        GameMain.Server.SendConsoleMessage(errorMsg, client, Color.Red);
+                    }
+                }
+            );
+            
+            AssignOnClientRequestExecute(
+                "give",
+                (Client client, Vector2 cursorWorldPos, string[] args) =>
+                {
+                    if (client.Character == null)
+                    {
+                        GameMain.Server.SendConsoleMessage("No character is selected!", client, Color.Red);
+                        return;
+                    }
+
+                    if (args.Length == 0)
+                    {
+                        GameMain.Server.SendConsoleMessage("Please give the name or identifier of the item to spawn.", client, Color.Red);
+                        return;
+                    }
+
+                    var modifiedArgs = new List<string>(args);
+                    modifiedArgs.Insert(1, "inventory");
+                    
+                    SpawnItem(modifiedArgs.ToArray(), cursorWorldPos, client.Character, out string errorMsg);
+                    if (!string.IsNullOrWhiteSpace(errorMsg))
+                    {
+                        GameMain.Server.SendConsoleMessage(errorMsg, client, Color.Red);
                     }
                 }
             );
@@ -2737,6 +2764,11 @@ namespace Barotrauma
                 foreach (Structure wall in Structure.WallList)
                 {
                     GameMain.Server.CreateEntityEvent(wall);
+                }
+                foreach (Hull hull in Hull.HullList)
+                {
+                    if (hull.IdFreed) { continue; }
+                    hull.CreateStatusEvent();
                 }
             }));
             commands.Add(new Command("stallfiletransfers", "stallfiletransfers [seconds]: A debug command that makes all file transfers take at least the specified duration.", (string[] args) =>

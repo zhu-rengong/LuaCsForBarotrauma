@@ -510,6 +510,17 @@ namespace Barotrauma
                 }
                 return false;
             }
+            //can't sell items in hidden inventories
+            Item rootContainer = item.Container;
+            while (rootContainer != null)
+            {
+                if (rootContainer.OwnInventory?.Container is { } containerComponent)
+                {
+                    if (!containerComponent.DrawInventory) { return false; }
+                    if (!containerComponent.IsAccessible()) { return false; }
+                }
+                rootContainer = rootContainer.Container;
+            }
             if (item.OwnInventory?.Container is ItemContainer itemContainer)
             {
                 var containedItems = item.ContainedItems;
@@ -546,7 +557,7 @@ namespace Barotrauma
             if (!string.IsNullOrEmpty(item.CargoContainerIdentifier))
             {
                 itemContainer = availableContainers.Find(ac =>
-                    ac.Inventory.CanBePut(item) &&
+                    ac.Inventory.CanProbablyBePut(item) &&
                     (ac.Item.Prefab.Identifier == item.CargoContainerIdentifier ||
                     ac.Item.Prefab.Tags.Contains(item.CargoContainerIdentifier)));
 
@@ -672,7 +683,8 @@ namespace Barotrauma
                     {
                         foreach (Item containedItem in character.Inventory.AllItemsMod)
                         {
-                            if (containedItem.OwnInventory != null &&
+                            //only put into containers that draw the inventory (not ones with a hidden inventory like circuit boxes!)
+                            if (containedItem.OwnInventory?.Container is { DrawInventory: true } &&
                                 containedItem.OwnInventory.TryPutItem(item, user: null, item.AllowedSlots)) 
                             { 
                                 break; 
@@ -703,14 +715,23 @@ namespace Barotrauma
 
         public static void ItemSpawned(Item item)
         {
-            Submarine sub = item.Submarine ?? item.RootContainer?.Submarine;
-            if (sub != null)
+            CharacterTeamType teamID = CharacterTeamType.Team1;
+            if (item.ParentInventory?.Owner is Character character)
             {
-                foreach (WifiComponent wifiComponent in item.GetComponents<WifiComponent>())
+                teamID = character.TeamID;
+            }
+            else
+            {
+                Submarine sub = item.Submarine ?? item.RootContainer?.Submarine;
+                if (sub != null)
                 {
-                    wifiComponent.TeamID = sub.TeamID;
+                    teamID = sub.TeamID;
                 }
             }
+            foreach (WifiComponent wifiComponent in item.GetComponents<WifiComponent>())
+            {
+                wifiComponent.TeamID = teamID;
+            }            
         }
 
         private readonly List<(PurchasedItem purchaseInfo, IdCard idCard)> purchasedIDCards = new List<(PurchasedItem purchaseInfo, IdCard idCard)>();

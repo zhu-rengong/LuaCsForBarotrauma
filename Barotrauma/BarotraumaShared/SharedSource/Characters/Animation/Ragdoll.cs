@@ -65,6 +65,9 @@ namespace Barotrauma
             }
         }
 
+        private readonly List<Body> limbBodies = new List<Body>();
+        public IEnumerable<Body> LimbBodies => limbBodies;
+
         public bool HasMultipleLimbsOfSameType => limbs != null && limbs.Length > limbDictionary.Count;
 
         private bool frozen;
@@ -109,7 +112,7 @@ namespace Barotrauma
 
         //a movement vector that overrides targetmovement if trying to steer
         //a Character to the position sent by server in multiplayer mode
-        protected Vector2 overrideTargetMovement;
+        protected Vector2? overrideTargetMovement;
 
         protected float floorY, standOnFloorY;
         protected Fixture floorFixture;
@@ -138,6 +141,12 @@ namespace Barotrauma
         protected int colliderIndex = 0;
 
         private Category prevCollisionCategory = Category.None;
+
+        /// <summary>
+        /// When the character is alive/conscious, the collider drives the character's movement and is used to sync the character's position in MP.
+        /// When unconscious, the ragdoll controls the movement and the collider just sticks to the main limb.
+        /// </summary>
+        public bool ColliderControlsMovement => character.CanMove;
 
         public bool IsStuck => Limbs.Any(l => l.IsStuck);
 
@@ -186,7 +195,7 @@ namespace Barotrauma
                 Vector2 pos = collider[colliderIndex].SimPosition;
                 pos.Y -= collider[colliderIndex].Height * 0.5f;
                 pos.Y += collider[value].Height * 0.5f;
-                collider[value].SetTransform(pos, collider[colliderIndex].Rotation);
+                collider[value].SetTransformIgnoreContacts(pos, collider[colliderIndex].Rotation);
 
                 collider[value].LinearVelocity  = collider[colliderIndex].LinearVelocity;
                 collider[value].AngularVelocity = collider[colliderIndex].AngularVelocity;
@@ -283,7 +292,7 @@ namespace Barotrauma
                     foreach (Limb limb in Limbs)
                     {
                         if (limb.IsSevered || !limb.body.PhysEnabled) { continue; }
-                        limb.body.SetTransform(Collider.SimPosition, Collider.Rotation);
+                        limb.body.SetTransformIgnoreContacts(Collider.SimPosition, Collider.Rotation);
                         //reset pull joints (they may be somewhere far away if the character has moved from the position where animations were last updated)
                         limb.PullJointEnabled = false;
                         limb.PullJointWorldAnchorB = limb.SimPosition;
@@ -298,11 +307,11 @@ namespace Barotrauma
         {
             get 
             { 
-                return (overrideTargetMovement == Vector2.Zero) ? targetMovement : overrideTargetMovement; 
+                return overrideTargetMovement ?? targetMovement; 
             }
             set 
             {
-                if (!MathUtils.IsValid(value)) return;
+                if (!MathUtils.IsValid(value)) { return; }
                 targetMovement.X = MathHelper.Clamp(value.X, -MAX_SPEED, MAX_SPEED);
                 targetMovement.Y = MathHelper.Clamp(value.Y, -MAX_SPEED, MAX_SPEED);
             }
@@ -525,6 +534,7 @@ namespace Barotrauma
 
         protected void CreateLimbs()
         {
+            limbBodies.Clear();
             limbs?.ForEach(l => l.Remove());
             Mass = 0;
             DebugConsole.Log($"Creating limbs from {RagdollParams.Name}.");
@@ -619,6 +629,7 @@ namespace Barotrauma
             {
                 throw new Exception($"Failed to add a limb to the character \"{Character?.ConfigPath ?? "null"}\" (limb index {ID} out of bounds). The ragdoll file may be configured incorrectly.");
             }
+            limbBodies.Add(limb.body.FarseerBody);
             Limbs[ID] = limb;
             Mass += limb.Mass;
             if (!limbDictionary.ContainsKey(limb.type)) { limbDictionary.Add(limb.type, limb); }
@@ -630,6 +641,7 @@ namespace Barotrauma
             limb.body.FarseerBody.OnCollision += OnLimbCollision;
             Array.Resize(ref limbs, Limbs.Length + 1);
             Limbs[Limbs.Length - 1] = limb;
+            limbBodies.Add(limb.body.FarseerBody);
             Mass += limb.Mass;
             if (!limbDictionary.ContainsKey(limb.type)) { limbDictionary.Add(limb.type, limb); }
             SetupDrawOrder();
@@ -637,14 +649,14 @@ namespace Barotrauma
 
         public void RemoveLimb(Limb limb)
         {
-            if (!Limbs.Contains(limb)) return;
+            if (!Limbs.Contains(limb)) { return; }
 
             Limb[] newLimbs = new Limb[Limbs.Length - 1];
 
             int i = 0;
             foreach (Limb existingLimb in Limbs)
             {
-                if (existingLimb == limb) continue;
+                if (existingLimb == limb) { continue; }
                 newLimbs[i] = existingLimb;
                 i++;
             }
@@ -681,8 +693,11 @@ namespace Barotrauma
                 }
                 LimbJoints = newJoints;
             }
-            
+
+            limbBodies.Remove(limb.body.FarseerBody);
             limb.Remove();
+            System.Diagnostics.Debug.Assert(!limbs.Contains(limb));
+            System.Diagnostics.Debug.Assert(limbs.None(l => l.Removed));
             foreach (LimbJoint limbJoint in attachedJoints)
             {
                 GameMain.World.Remove(limbJoint.Joint);
@@ -1298,6 +1313,11 @@ namespace Barotrauma
                 }
             }
 
+            float MaxVel = NetConfig.MaxPhysicsBodyVelocity;
+            Collider.LinearVelocity = new Vector2(
+                NetConfig.Quantize(Collider.LinearVelocity.X, -MaxVel, MaxVel, 12),
+                NetConfig.Quantize(Collider.LinearVelocity.Y, -MaxVel, MaxVel, 12));
+
             if (forceStanding)
             {
                 inWater = false;
@@ -1442,7 +1462,7 @@ namespace Barotrauma
                 else
                 {
                     // Falling -> ragdoll briefly if we are not moving at all, because we are probably stuck.
-                    if (Collider.LinearVelocity == Vector2.Zero)
+                    if (Collider.LinearVelocity == Vector2.Zero && !character.IsRemotePlayer)
                     {
                         character.IsRagdolled = true;
                         if (character.IsBot)
@@ -1455,6 +1475,30 @@ namespace Barotrauma
             }
             UpdateProjSpecific(deltaTime, cam);
             forceNotStanding = false;
+        }
+
+        /// <summary>
+        /// Update the logic that needs to run when the ragdoll is what controls the character's movement instead of the collider <see cref="ColliderControlsMovement"/>
+        /// (making the collider stick to the ragdoll's main limb).
+        /// </summary>
+        protected void UpdateRagdollControlsMovement()
+        {
+            levitatingCollider = false;
+            Collider.FarseerBody.FixedRotation = false;
+            if (Collider.Enabled)
+            {
+                //deactivating the collider -> make the main limb inherit the collider's velocity because it'll control the movement now
+                MainLimb.body.LinearVelocity = Collider.LinearVelocity;
+                Collider.Enabled = false;
+            }
+            Collider.LinearVelocity = MainLimb.LinearVelocity;
+            Collider.SetTransformIgnoreContacts(MainLimb.SimPosition, MainLimb.Rotation);
+            //reset pull joints to prevent the character from "hanging" mid-air if pull joints had been active when the character was still moving
+            //(except when dragging, then we need the pull joints)
+            if (!Draggable || character.SelectedBy == null)
+            {
+                ResetPullJoints();
+            }            
         }
 
         private void CheckBodyInRest(float deltaTime)
@@ -2093,7 +2137,7 @@ namespace Barotrauma
         partial void UpdateNetPlayerPositionProjSpecific(float deltaTime, float lowestSubPos);
         private void UpdateNetPlayerPosition(float deltaTime)
         {
-            if (GameMain.NetworkMember == null) return;
+            if (GameMain.NetworkMember == null) { return; }
 
             float lowestSubPos = float.MaxValue;
             if (Submarine.Loaded.Any())
@@ -2251,6 +2295,7 @@ namespace Barotrauma
                 }
                 limbs = null;
             }
+            limbBodies.Clear();
 
             if (collider != null)
             {

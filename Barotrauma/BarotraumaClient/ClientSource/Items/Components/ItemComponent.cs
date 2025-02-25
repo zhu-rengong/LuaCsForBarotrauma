@@ -62,6 +62,10 @@ namespace Barotrauma.Items.Components
         private readonly Dictionary<ActionType, List<ItemSound>> sounds;
         private Dictionary<ActionType, SoundSelectionMode> soundSelectionModes;
 
+        /// <summary>
+        /// Starts the timer for  delayed client-side corrections (<see cref="StartDelayedCorrection(IReadMessage, float, bool)"/>) - in other words,
+        /// the client will not attempt to read server updates for this component until the timer elapses.
+        /// </summary>
         protected float correctionTimer;
 
         public float IsActiveTimer;
@@ -392,11 +396,7 @@ namespace Barotrauma.Items.Components
                     float volume = GetSoundVolume(itemSound);
                     if (volume <= 0.0001f) { return; }
                     loopingSound = itemSound;
-                    loopingSoundChannel = loopingSound.RoundSound.Sound.Play(
-                        new Vector3(position.X, position.Y, 0.0f), 
-                        0.01f,
-                        freqMult: itemSound.RoundSound.GetRandomFrequencyMultiplier(),
-                        muffle: SoundPlayer.ShouldMuffleSound(Character.Controlled, position, loopingSound.Range, Character.Controlled?.CurrentHull));
+                    loopingSoundChannel = SoundPlayer.PlaySound(loopingSound.RoundSound, position, volume: 0.01f, hullGuess: item.CurrentHull);
                     loopingSoundChannel.Looping = true;
                     //TODO: tweak
                     loopingSoundChannel.Near = loopingSound.Range * 0.4f;
@@ -407,7 +407,7 @@ namespace Barotrauma.Items.Components
             {
                 float volume = GetSoundVolume(itemSound);
                 if (volume <= 0.0001f) { return; }
-                var channel = SoundPlayer.PlaySound(itemSound.RoundSound.Sound, position, volume, itemSound.Range, itemSound.RoundSound.GetRandomFrequencyMultiplier(), item.CurrentHull, ignoreMuffling: itemSound.RoundSound.IgnoreMuffling);
+                var channel = SoundPlayer.PlaySound(itemSound.RoundSound, position, volume, hullGuess: item.CurrentHull);
                 if (channel != null) { playingOneshotSoundChannels.Add(channel); }
             }
         }
@@ -764,7 +764,11 @@ namespace Barotrauma.Items.Components
         /// </summary>
         protected virtual void CreateGUI() { }
 
-        //Starts a coroutine that will read the correct state of the component from the NetBuffer when correctionTimer reaches zero.
+        /// <summary>
+        /// Starts a coroutine that will read the correct state of the component from the NetBuffer when correctionTimer reaches zero.
+        /// Useful in cases where we a client is constantly adjusting some value, and we don't want state updates from the server to interfere with it 
+        /// (e.g. setting the value back to what a client just set it to, when the client has already modified the value further).
+        /// </summary>
         protected void StartDelayedCorrection(IReadMessage buffer, float sendingTime, bool waitForMidRoundSync = false)
         {
             if (delayedCorrectionCoroutine != null) { CoroutineManager.StopCoroutines(delayedCorrectionCoroutine); }
