@@ -12,7 +12,6 @@ namespace Barotrauma
     partial class PirateMission : Mission
     {
         private readonly ContentXElement submarineTypeConfig;
-        private readonly ContentXElement characterConfig;
         private readonly ContentXElement characterTypeConfig;
         private readonly float addedMissionDifficultyPerPlayer;
 
@@ -22,10 +21,6 @@ namespace Barotrauma
         private Identifier factionIdentifier;
 
         private Submarine enemySub;
-        private readonly List<Character> characters = new List<Character>();
-        private readonly Dictionary<Character, List<Item>> characterItems = new Dictionary<Character, List<Item>>();
-
-        private readonly Dictionary<HumanPrefab, List<StatusEffect>> characterStatusEffects = new Dictionary<HumanPrefab, List<StatusEffect>>();
 
         // Update the last sighting periodically so that the players can find the pirate sub even if they have lost the track of it.
         private readonly float pirateSightingUpdateFrequency = 30;
@@ -94,7 +89,6 @@ namespace Barotrauma
         public PirateMission(MissionPrefab prefab, Location[] locations, Submarine sub) : base(prefab, locations, sub)
         {
             submarineTypeConfig = prefab.ConfigElement.GetChildElement("SubmarineTypes");
-            characterConfig = prefab.ConfigElement.GetChildElement("Characters");
             characterTypeConfig = prefab.ConfigElement.GetChildElement("CharacterTypes");
             addedMissionDifficultyPerPlayer = prefab.ConfigElement.GetAttributeFloat("addedmissiondifficultyperplayer", 0);
 
