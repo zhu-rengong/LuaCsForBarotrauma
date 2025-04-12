@@ -570,7 +570,8 @@ namespace Barotrauma
             Lualy<Barotrauma.AIObjectiveCleanupItems>();
             Lualy<Barotrauma.AIObjectiveCombat>();
             Lualy<Barotrauma.AIObjectiveContainItem>();
-            Lualy<Barotrauma.AIObjectiveDecontainItem>();
+            Lualy<Barotrauma.AIObjectiveDeconstructItem>();
+            Lualy<Barotrauma.AIObjectiveDeconstructItems>();
             Lualy<Barotrauma.AIObjectiveEscapeHandcuffs>();
             Lualy<Barotrauma.AIObjectiveExtinguishFire>();
             Lualy<Barotrauma.AIObjectiveExtinguishFires>();
